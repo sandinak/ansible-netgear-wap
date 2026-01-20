@@ -7,7 +7,7 @@ DEVICES = [
     ('WAX210', '172.19.4.10'),
     ('WAX218', '172.19.4.14'),
 ]
-PASSWORD = '***REMOVED***'
+PASSWORD = 'your_password_here'
 
 class FakeModule:
     def __init__(self):

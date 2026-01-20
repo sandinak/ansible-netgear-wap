@@ -96,7 +96,7 @@ EXAMPLES = r'''
 - name: Configure VOV SSID
   netgear_wax210_wireless:
     host: 172.19.4.10
-    password: ***REMOVED***
+    password: your_password_here
     ssid_name: VOV
     encryption: sae-mixed+ccmp
     passphrase: MySecurePassword
@@ -108,7 +108,7 @@ EXAMPLES = r'''
 - name: Get wireless config
   netgear_wax210_wireless:
     host: 172.19.4.10
-    password: ***REMOVED***
+    password: your_password_here
     ssid_name: VOV
     state: present
   register: wap_config
@@ -117,7 +117,7 @@ EXAMPLES = r'''
 - name: Disable SSID
   netgear_wax210_wireless:
     host: 172.19.4.11
-    password: ***REMOVED***
+    password: your_password_here
     ssid_name: TestSSID
     state: disabled
 '''

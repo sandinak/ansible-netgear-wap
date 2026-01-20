@@ -39,14 +39,14 @@ EXAMPLES = r'''
 - name: Get all wireless config
   netgear_wax210_info:
     host: 172.19.4.10
-    password: ***REMOVED***
+    password: your_password_here
   register: all_config
 
 # Get specific SSID configuration
 - name: Get VOV SSID config
   netgear_wax210_info:
     host: 172.19.4.10
-    password: ***REMOVED***
+    password: your_password_here
     ssid_name: VOV
   register: vov_config
 '''

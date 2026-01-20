@@ -52,14 +52,14 @@ EXAMPLES = r'''
 - name: Set 5GHz channel
   netgear_wax210_radio:
     host: 172.19.4.10
-    password: ***REMOVED***
+    password: your_password_here
     channel_5g: "36"
 
 # Set both channels
 - name: Set both radio channels
   netgear_wax210_radio:
     host: 172.19.4.10
-    password: ***REMOVED***
+    password: your_password_here
     channel_2g: "auto"
     channel_5g: "44"
 
@@ -67,7 +67,7 @@ EXAMPLES = r'''
 - name: Get radio config
   netgear_wax210_radio:
     host: 172.19.4.10
-    password: ***REMOVED***
+    password: your_password_here
   check_mode: true
   register: radio_config
 '''
