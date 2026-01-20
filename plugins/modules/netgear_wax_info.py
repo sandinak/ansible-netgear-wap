@@ -6,7 +6,7 @@ __metaclass__ = type
 
 DOCUMENTATION = r'''
 ---
-module: netgear_wax210_info
+module: netgear_wax_info
 short_description: Get information from Netgear WAX210 wireless access point
 version_added: "1.0.0"
 description:

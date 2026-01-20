@@ -1,50 +1,51 @@
-# NETGEAR WAX210 Ansible Collection
+# NETGEAR WAX Series Ansible Collection
 
-Ansible modules for managing NETGEAR WAX210 wireless access points.
+Ansible modules for managing NETGEAR WAX series wireless access points with automatic model detection.
+
+## Supported Models
+
+| Model  | Status | Notes |
+|--------|--------|-------|
+| WAX210 | ✅ | Fully tested |
+| WAX218 | ✅ | Fully tested |
 
 ## Features
 
 | Feature | Module | Status |
 |---------|--------|--------|
-| Read SSID configuration | `netgear_wax210_info` | ✅ |
-| Configure SSID (VLAN, passphrase, radios) | `netgear_wax210_wireless` | ✅ |
-| Configure radio channels | `netgear_wax210_radio` | ✅ |
-| Configure AP name | `netgear_wax210_system` | ✅ |
-| Enable/disable management interface | `netgear_wax210_system` | ✅ |
+| Read SSID configuration | `netgear_wax_info` | ✅ |
+| Configure SSID (VLAN, passphrase, radios) | `netgear_wax_wireless` | ✅ |
+| Configure radio channels | `netgear_wax_radio` | ✅ |
+| Configure AP name | `netgear_wax_system` | ✅ |
+| Enable/disable management interface | `netgear_wax_system` | ✅ |
 
 ## Quick Start
 
 ```yaml
-# Read all SSIDs
+# Read all SSIDs (works on any supported model)
 - name: Get AP configuration
-  netgear_wax210_info:
+  netgear_wax_info:
     host: 172.19.4.10
     password: "{{ wap_password }}"
   register: ap_config
 
 # Configure SSID VLAN
 - name: Set VOV to VLAN 121
-  netgear_wax210_wireless:
+  netgear_wax_wireless:
     host: 172.19.4.10
     password: "{{ wap_password }}"
     ssid_name: "VOV"
     vlan: "vlan121"
     state: enabled
 
-# Set channels to auto
-- name: Configure radio channels
-  netgear_wax210_radio:
-    host: 172.19.4.10
+# Optional: Override model detection
+- name: Force WAX218 model
+  netgear_wax_wireless:
+    host: 172.19.4.14
     password: "{{ wap_password }}"
-    wifi0_channel: "auto"
-    wifi1_channel: "auto"
-
-# Set AP name
-- name: Configure AP name
-  netgear_wax210_system:
-    host: 172.19.4.10
-    password: "{{ wap_password }}"
-    ap_name: "LOBBY-WAP"
+    model: WAX218  # Optional - auto-detected if omitted
+    ssid_name: "VOV"
+    vlan: "vlan121"
 ```
 
 ## Installation
@@ -54,7 +55,7 @@ git clone <repository-url>
 cd ansible-netgear-wap
 ```
 
-Modules are in `library/` and auto-discovered by Ansible.
+Modules are in `plugins/modules/` as an Ansible Galaxy collection.
 
 ## Documentation
 
@@ -67,19 +68,21 @@ Modules are in `library/` and auto-discovered by Ansible.
 Use the automated analyzer to discover API endpoints for new WAX models:
 
 ```bash
-make discovery  # Install dependencies
-python3 automated_luci_analyzer.py --host <IP> --password <pass>
+make analyze HOST=<IP> PASSWORD=<pass>
 ```
+
+Analysis tools are in `tools/analyzer/`.
 
 ## Requirements
 
 - Python 3.6+
 - Ansible 2.9+
-- For analyzer: Firefox, geckodriver, selenium, mitmproxy
+- For analyzer: Firefox, geckodriver (installed via `make analyze`)
 
 ## Tested Firmware
 
 - WAX210 V1.1.0.34
+- WAX218 (tested)
 
 ## License
 

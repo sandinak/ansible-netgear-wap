@@ -9,7 +9,7 @@ __metaclass__ = type
 
 DOCUMENTATION = r'''
 ---
-module: netgear_wax210_system
+module: netgear_wax_system
 short_description: Configure Netgear WAX210 system-level settings
 version_added: "1.0.0"
 description:
@@ -150,9 +150,13 @@ class WAX210SystemAPI:
         )
         self.cookie_jar = cookie_jar
 
-    def _hash_password(self, password):
-        """Hash password using SHA512 as the device expects"""
+    def _hash_password_sha512(self, password):
+        """Hash password using SHA512 (newer firmware)"""
         return hashlib.sha512(to_bytes(password + "\n")).hexdigest()
+
+    def _hash_password_md5(self, password):
+        """Hash password using MD5 (older firmware/WAX218)"""
+        return hashlib.md5(to_bytes(password + "\n")).hexdigest()
 
     def _make_request(self, url, data=None, method='GET'):
         """Make HTTP request and return response body"""
@@ -175,9 +179,15 @@ class WAX210SystemAPI:
         """Login to the AP and get session token"""
         req = urllib_request.Request(f"{self.base_url}/cgi-bin/luci")
         req.add_header('User-Agent', 'Mozilla/5.0')
-        self.opener.open(req)
+        response = self.opener.open(req)
+        login_html = response.read().decode('utf-8')
 
-        hashed_pw = self._hash_password(self.password)
+        # Detect if firmware uses SHA-512 (new) or MD5 (old)
+        if 'sha512sum' in login_html:
+            hashed_pw = self._hash_password_sha512(self.password)
+        else:
+            hashed_pw = self._hash_password_md5(self.password)
+
         login_data = f"username={self.username}&password={hashed_pw}&agree=1&account={self.username}"
 
         req = urllib_request.Request(f"{self.base_url}/cgi-bin/luci", data=to_bytes(login_data))
@@ -190,7 +200,8 @@ class WAX210SystemAPI:
         response = self.opener.open(req)
         body = response.read().decode('utf-8')
 
-        stok_match = re.search(r';stok=([a-f0-9]+)', body)
+        # Check for stok in body (works for both models)
+        stok_match = re.search(r'stok=([a-f0-9]+)', body)
         if not stok_match:
             return False
 

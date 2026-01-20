@@ -9,16 +9,17 @@ __metaclass__ = type
 
 DOCUMENTATION = r'''
 ---
-module: netgear_wax210_wireless
-short_description: Manage Netgear WAX210 wireless access point configuration
+module: netgear_wax_wireless
+short_description: Manage Netgear WAX series wireless access point configuration
 version_added: "1.0.0"
 description:
-    - Manage wireless SSID configuration on Netgear WAX210 access points
+    - Manage wireless SSID configuration on Netgear WAX series access points
+    - Supports WAX210 and WAX218 models with automatic model detection
     - Configure SSID, encryption, VLAN, isolation, and other wireless settings
     - Supports both 2.4GHz and 5GHz radios
 options:
     host:
-        description: IP address or hostname of the WAX210 access point
+        description: IP address or hostname of the access point
         required: true
         type: str
     username:
@@ -78,6 +79,14 @@ options:
         required: false
         type: bool
         default: false
+    model:
+        description:
+            - Override automatic model detection
+            - If not specified, the module auto-detects from the login page
+        required: false
+        type: str
+        choices: ['WAX210', 'WAX218']
+        default: null
 author:
     - Ansible Netgear WAP Project
 '''
@@ -435,6 +444,10 @@ class WAX210API:
         self.stok = None
         self.validate_certs = module.params.get('validate_certs', False)
 
+        # Model detection - can be overridden by module param
+        self.model = module.params.get('model', None)  # Auto-detect if None
+        self.ssid_popup_endpoint = None  # Set during login based on model
+
         # Create SSL context that doesn't verify certificates
         self.ssl_ctx = ssl.create_default_context()
         if not self.validate_certs:
@@ -478,10 +491,10 @@ class WAX210API:
             self.module.fail_json(msg=f"URL error: {e.reason}")
 
     def login(self):
-        """Authenticate to the device"""
+        """Authenticate to the device and detect model."""
         login_url = f"{self.base_url}/cgi-bin/luci"
 
-        # First GET the login page to detect firmware version
+        # First GET the login page to detect firmware version and model
         req = urllib_request.Request(login_url)
         req.add_header('User-Agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:132.0) Gecko/20100101 Firefox/132.0')
 
@@ -490,6 +503,21 @@ class WAX210API:
             body = response.read().decode('utf-8')
         except Exception as e:
             self.module.fail_json(msg=f"Failed to access login page: {str(e)}")
+
+        # Auto-detect model from login page if not specified
+        if not self.model:
+            model_match = re.search(r'(WAX\d+)', body)
+            if model_match:
+                self.model = model_match.group(1)
+            else:
+                self.model = 'WAX210'  # Default fallback
+
+        # Set model-specific SSID popup endpoint
+        # WAX210: wifi_Encryption_P2P, WAX218: wifi_Encryption_Combined
+        if self.model == 'WAX218':
+            self.ssid_popup_endpoint = '/admin/network/wifi_Encryption_Combined'
+        else:
+            self.ssid_popup_endpoint = '/admin/network/wifi_Encryption_P2P'
 
         # Detect if firmware uses SHA-512 (new) or MD5 (old)
         uses_sha512 = 'sha512sum' in body
@@ -500,7 +528,7 @@ class WAX210API:
         else:
             hashed_pw = self._hash_password_md5(self.password)
 
-        # Login - new firmware requires both 'username' and 'account' parameters
+        # Login - uses 'username' and 'password' fields (works for both models)
         login_data = f"username={self.username}&password={hashed_pw}&agree=1&account={self.username}"
 
         req = urllib_request.Request(login_url, data=to_bytes(login_data))
@@ -628,7 +656,7 @@ class WAX210API:
         for slot in range(1, 9):
             params = self._get_popup_params(slot)
             query_string = urlencode(params)
-            popup_url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/network/wifi_Encryption_P2P?{query_string}"
+            popup_url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}{self.ssid_popup_endpoint}?{query_string}"
             try:
                 body, response = self._make_request(popup_url)
                 # Look for SSID name in the popup (use id= attribute which has the actual value)
@@ -801,7 +829,7 @@ class WAX210API:
         if not self.stok:
             self.login()
 
-        popup_url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/network/wifi_Encryption_P2P"
+        popup_url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}{self.ssid_popup_endpoint}"
         params = self._get_popup_params(ssid_slot)
         query_string = urlencode(params)
         full_url = f"{popup_url}?{query_string}"
@@ -818,7 +846,7 @@ class WAX210API:
         if not self.stok:
             self.login()
 
-        popup_url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/network/wifi_Encryption_P2P"
+        popup_url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}{self.ssid_popup_endpoint}"
         params = self._get_popup_params(ssid_slot)
         query_string = urlencode(params)
         full_url = f"{popup_url}?{query_string}"
@@ -864,7 +892,7 @@ class WAX210API:
         if not self.stok:
             self.login()
 
-        popup_url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/network/wifi_Encryption_P2P"
+        popup_url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}{self.ssid_popup_endpoint}"
         params = self._get_popup_params(ssid_slot)
         query_string = urlencode(params)
         full_url = f"{popup_url}?{query_string}"
@@ -962,7 +990,7 @@ class WAX210API:
         if not self.stok:
             self.login()
 
-        popup_url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/network/wifi_Encryption_P2P"
+        popup_url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}{self.ssid_popup_endpoint}"
         popup_params = self._get_popup_params(ssid_slot)
         query_string = urlencode(popup_params)
         full_url = f"{popup_url}?{query_string}"
@@ -1118,7 +1146,7 @@ class WAX210API:
 
         req = urllib_request.Request(submit_url, data=encoded_data, method='POST')
         req.add_header('Content-Type', 'application/x-www-form-urlencoded')
-        req.add_header('Referer', f'{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/network/wifi_Encryption_P2P')
+        req.add_header('Referer', f'{self.base_url}/cgi-bin/luci/;stok={self.stok}{self.ssid_popup_endpoint}')
         req.add_header('Origin', self.base_url)
         req.add_header('User-Agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:132.0) Gecko/20100101 Firefox/132.0')
         if sysauth:
@@ -1186,6 +1214,8 @@ def main():
         hidden=dict(type='bool', required=False),
         band_steering=dict(type='bool', required=False),
         validate_certs=dict(type='bool', required=False, default=False),
+        model=dict(type='str', required=False, default=None,
+                   choices=['WAX210', 'WAX218', None]),
     )
 
     result = dict(

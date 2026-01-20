@@ -1,7 +1,7 @@
 ---
 namespace: sandinak
 name: netgear_wap
-version: 1.0.0
+version: 1.1.0
 readme: README.md
 authors:
   - sandinak <1916398+sandinak@users.noreply.github.com>
@@ -13,6 +13,7 @@ tags:
   - netgear
   - wireless
   - wax210
+  - wax218
   - access_point
   - networking
   - wifi
@@ -27,6 +28,7 @@ build_ignore:
   - 'venv'
   - '.git'
   - '.gitignore'
-  - 'automated_luci_analyzer.py'
+  - 'tools'
+  - 'tests'
   - 'Makefile'
 

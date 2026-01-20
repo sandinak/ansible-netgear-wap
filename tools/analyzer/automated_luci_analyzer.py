@@ -1,40 +1,50 @@
 #!/usr/bin/env python3
 """
-Automated Luci Interface Analyzer for NETGEAR WAX Series Access Points
+Automated LuCI Interface Analyzer for NETGEAR WAX Series Access Points
 
-Uses Selenium + MITM proxy to automatically probe and analyze the LuCI web interface.
+Uses Selenium + MITM proxy to probe and analyze the LuCI web interface.
 Handles popup windows, Save/Apply workflow, and captures all traffic.
+Works with multiple WAX models - the browser's JavaScript handles auth differences.
 
 USAGE:
+    make analyze HOST=172.19.4.10 PASSWORD=mypassword
+    # or directly:
     python3 automated_luci_analyzer.py --host 172.19.4.10 --password <password>
 
-REQUIREMENTS:
+REQUIREMENTS (installed by `make analyze`):
     - Firefox browser
     - geckodriver (brew install geckodriver on macOS)
     - mitmproxy (pip install mitmproxy)
     - selenium (pip install selenium)
 
+SUPPORTED MODELS:
+    - WAX210 (firmware V1.1.0.34) - SHA-512 auth
+    - WAX218 (firmware 2.0.1.2)   - MD5 auth
+
 WHAT THIS TOOL DISCOVERS:
+    - Model identification and firmware version
     - Form field names and values (cbid.* UCI format)
     - API endpoints and their parameters
     - Popup form URLs and submission patterns
-    - CSRF token handling
     - Session token (stok) management
+    - SSID interface naming (wifi0_ssid_*, wifi1_ssid_*)
 
-KEY FINDINGS FOR WAX210 (V1.1.0.34):
-    - Authentication: SHA-512 hash of password + newline
-    - Session: stok token in URL path, sysauth cookie
-    - SSID Config: /admin/network/wifi_Encryption_P2P popup form
-    - Channel Config: /admin/network/wifi_Channel popup form
-    - System Config: /admin/network/wireless_device main page
-    - Passphrase: AES-256-ECB encrypted with static key
+KEY FINDINGS:
+    WAX210:
+        - Auth: SHA-512 hash, luci_username/luci_password fields
+        - SSID Config: /admin/network/wifi_Encryption_P2P popup
+        - Channel Config: /admin/network/wifi_Channel popup
+    WAX218:
+        - Auth: MD5 hash, username/password fields
+        - SSID Config: Different endpoint (discovered at runtime)
+        - Channel Config: /admin/network/wifi_Channel popup
 
 OUTPUT:
-    Creates timestamped directory with:
+    Creates luci_session_<timestamp>/ directory with:
     - HTML page captures at each stage
     - PNG screenshots
     - JSON files with form field data
-    - MITM proxy logs of all HTTP traffic
+    - MITM proxy logs (if available)
 """
 
 import json
@@ -212,20 +222,33 @@ class LuciAnalyzer:
             except:
                 pass
 
-            # Check if logged in (look for stok in URL)
+            # Check if logged in (look for stok in URL or page)
             current_url = self.driver.current_url
             print(f"   Current URL: {current_url}")
 
             if 'stok=' in current_url:
-                print("✅ Login successful")
+                print("✅ Login successful (stok in URL)")
                 return True
-            else:
-                print("❌ Login failed - no stok in URL")
-                # Save page source for debugging
-                with open("login_page_source.html", "w") as f:
-                    f.write(self.driver.page_source)
-                print("   Saved page source: login_page_source.html")
-                return False
+
+            # WAX218 and some models put stok in page content, not URL
+            page_source = self.driver.page_source
+            import re
+            stok_match = re.search(r'stok=([a-f0-9]+)', page_source)
+            if stok_match:
+                stok = stok_match.group(1)
+                print(f"✅ Login successful (stok in page: {stok[:16]}...)")
+                # Navigate to a page with stok in URL so subsequent navigation works
+                stok_url = f"https://{self.host}/cgi-bin/luci/;stok={stok}/admin/network/wireless_device"
+                self.driver.get(stok_url)
+                time.sleep(2)
+                return True
+
+            print("❌ Login failed - no stok found")
+            # Save page source for debugging
+            with open("login_page_source.html", "w") as f:
+                f.write(page_source)
+            print("   Saved page source: login_page_source.html")
+            return False
 
         except Exception as e:
             print(f"❌ Login error: {e}")

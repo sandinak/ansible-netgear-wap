@@ -2,18 +2,23 @@
 
 This guide explains how to analyze a new NETGEAR WAX model and extend the collection.
 
+## Supported Models
+
+| Model  | Auth Hash | SSID Popup Endpoint | Notes |
+|--------|-----------|---------------------|-------|
+| WAX210 | SHA-512   | wifi_Encryption_P2P | 4 SSIDs per radio |
+| WAX218 | MD5       | wifi_Encryption_Combined | 8 SSIDs per radio |
+
 ## Prerequisites
 
 1. Firefox browser installed
 2. geckodriver installed (`brew install geckodriver` on macOS)
-3. Python dependencies: `pip install selenium mitmproxy`
+3. Python dependencies installed via Makefile
 
 ## Step 1: Run the Analyzer
 
 ```bash
-python3 automated_luci_analyzer.py \
-  --host <AP_IP> \
-  --password <password>
+make analyze HOST=<AP_IP> PASSWORD=<password>
 ```
 
 This will:

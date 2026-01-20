@@ -1,87 +1,106 @@
-.PHONY: help venv discovery clean test
+.PHONY: help venv analyze analyze-clean clean test
 
 PYTHON := python3
 VENV := venv
 VENV_BIN := $(VENV)/bin
 PIP := $(VENV_BIN)/pip
 PYTHON_VENV := $(VENV_BIN)/python
+ANALYZER_DIR := tools/analyzer
 
 # Default target
 help:
-	@echo "NETGEAR WAX210 Ansible Collection"
+	@echo "NETGEAR WAX Series Ansible Collection"
 	@echo ""
 	@echo "Available targets:"
-	@echo "  venv       - Create Python virtual environment"
-	@echo "  discovery  - Set up environment for LuCI interface discovery"
-	@echo "  clean      - Remove virtual environment and cache files"
-	@echo "  test       - Run Ansible module tests"
+	@echo "  venv           - Create Python virtual environment"
+	@echo "  analyze        - Analyze a WAX AP to discover endpoints and forms"
+	@echo "  analyze-clean  - Clean analyzer output files (keeps tools)"
+	@echo "  clean          - Remove virtual environment and cache files"
+	@echo "  test           - Run Ansible module syntax check"
 	@echo ""
-	@echo "Modules:"
-	@echo "  netgear_wax210_info     - Read AP configuration (read-only)"
-	@echo "  netgear_wax210_wireless - Configure SSIDs (VLAN, passphrase, radios)"
-	@echo "  netgear_wax210_radio    - Configure radio channels"
-	@echo "  netgear_wax210_system   - Configure AP name, management interface"
+	@echo "Modules (support WAX210, WAX218 with auto-detection):"
+	@echo "  netgear_wax210_info      - Read AP configuration (read-only)"
+	@echo "  netgear_wax210_wireless  - Configure SSIDs (VLAN, passphrase, radios)"
+	@echo "  netgear_wax210_radio     - Configure radio channels"
+	@echo "  netgear_wax210_system    - Configure AP name, management interface"
+	@echo ""
+	@echo "Analyze usage:"
+	@echo "  make analyze HOST=172.19.4.10 PASSWORD=mypassword"
 
-# Create virtual environment
+# Create virtual environment with base dependencies
 venv:
 	@echo "Creating Python virtual environment..."
 	$(PYTHON) -m venv $(VENV)
 	$(PIP) install --upgrade pip
+	$(PIP) install requests pycryptodome
 	@echo "✅ Virtual environment created at $(VENV)/"
 
-# Discovery environment setup
-discovery: venv
+# Analyze a WAX AP - discovers endpoints and forms using Selenium
+analyze: venv
+ifndef HOST
+	$(error HOST is required. Usage: make analyze HOST=172.19.4.10 PASSWORD=mypassword)
+endif
+ifndef PASSWORD
+	$(error PASSWORD is required. Usage: make analyze HOST=172.19.4.10 PASSWORD=mypassword)
+endif
 	@echo ""
 	@echo "=========================================="
-	@echo "Setting up LuCI Discovery Environment"
+	@echo "Setting up analysis environment"
 	@echo "=========================================="
-	@echo ""
-	@echo "Installing discovery dependencies..."
-	$(PIP) install selenium mitmproxy
-	@echo ""
-	@echo "Checking for geckodriver (Firefox WebDriver)..."
+	$(PIP) install --quiet selenium mitmproxy
+	@echo "Checking for geckodriver..."
 	@if command -v geckodriver >/dev/null 2>&1; then \
-		echo "✅ geckodriver found: $$(which geckodriver)"; \
+		echo "✅ geckodriver found"; \
 	else \
 		echo "❌ geckodriver not found"; \
-		echo ""; \
-		echo "Install with:"; \
-		echo "  macOS:   brew install geckodriver"; \
-		echo "  Linux:   Download from https://github.com/mozilla/geckodriver/releases"; \
-		echo ""; \
+		echo "Install with: brew install geckodriver (macOS)"; \
 		exit 1; \
 	fi
-	@echo ""
 	@echo "Checking for Firefox..."
 	@if command -v firefox >/dev/null 2>&1 || [ -d "/Applications/Firefox.app" ]; then \
 		echo "✅ Firefox found"; \
 	else \
-		echo "⚠️  Firefox not found - install Firefox browser"; \
+		echo "❌ Firefox not found - please install Firefox"; \
+		exit 1; \
 	fi
 	@echo ""
 	@echo "=========================================="
-	@echo "✅ Discovery environment ready!"
+	@echo "Analyzing WAX AP at $(HOST)"
 	@echo "=========================================="
-	@echo ""
-	@echo "Run analysis with:"
-	@echo "  $(PYTHON_VENV) automated_luci_analyzer.py --host <host> --password <pass>"
-	@echo ""
+	cd $(ANALYZER_DIR) && ../../$(PYTHON_VENV) automated_luci_analyzer.py --host $(HOST) --password "$(PASSWORD)"
+
+# Clean analyzer output files (keeps tools)
+analyze-clean:
+	@echo "Cleaning analyzer output files..."
+	rm -f $(ANALYZER_DIR)/*.html $(ANALYZER_DIR)/*.png $(ANALYZER_DIR)/*.json $(ANALYZER_DIR)/*.txt
+	rm -rf $(ANALYZER_DIR)/luci_capture_*
+	@echo "✅ Analyzer output cleaned"
 
 # Clean up
 clean:
 	@echo "Cleaning up..."
 	rm -rf $(VENV)
 	rm -rf __pycache__
-	rm -rf library/__pycache__
 	rm -rf plugins/__pycache__
+	rm -rf analysis_*
+	rm -rf luci_session_*
 	find . -type f -name "*.pyc" -delete
 	find . -type d -name "__pycache__" -delete
 	@echo "✅ Cleaned up"
 
-# Test Ansible modules
+# Test Ansible modules - syntax check
 test: venv
-	@echo "Running Ansible module tests..."
-	$(PIP) install ansible
-	ansible-playbook test_wireless_config.yml
-	@echo "✅ Tests complete"
+	@echo "Running module syntax check..."
+	$(PIP) install --quiet ansible requests
+	@for f in plugins/modules/*.py; do \
+		echo "Checking $$f..."; \
+		$(PYTHON_VENV) -m py_compile $$f || exit 1; \
+	done
+	@echo "✅ All modules compile successfully"
+
+# Integration test - requires access to WAX devices
+test-integration: venv
+	@echo "Running integration tests on WAX210 and WAX218..."
+	$(PIP) install --quiet requests
+	$(PYTHON_VENV) tests/test_all_modules.py
 

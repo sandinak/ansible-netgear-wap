@@ -9,7 +9,7 @@ __metaclass__ = type
 
 DOCUMENTATION = r'''
 ---
-module: netgear_wax210_radio
+module: netgear_wax_radio
 short_description: Manage Netgear WAX210 radio/channel configuration
 version_added: "1.0.0"
 description:
@@ -132,20 +132,37 @@ class WAX210RadioAPI:
         }
 
     def login(self):
-        """Login to the WAX210 and obtain session token"""
+        """Login to the WAX210/WAX218 and obtain session token"""
         try:
-            self.session.get(f'https://{self.host}/cgi-bin/luci', headers=self.headers)
-            hashed_pw = hashlib.sha512(f'{self.password}\n'.encode()).hexdigest()
+            # Get login page to detect auth type
+            r = self.session.get(f'https://{self.host}/cgi-bin/luci', headers=self.headers)
+            login_html = r.text
+
+            # Detect if firmware uses SHA-512 (new) or MD5 (old)
+            if 'sha512sum' in login_html:
+                hashed_pw = hashlib.sha512(f'{self.password}\n'.encode()).hexdigest()
+            else:
+                hashed_pw = hashlib.md5(f'{self.password}\n'.encode()).hexdigest()
+
             self.session.cookies.set('is_login', '1')
             r = self.session.post(
                 f'https://{self.host}/cgi-bin/luci',
                 data={'username': self.username, 'password': hashed_pw, 'agree': '1', 'account': self.username},
                 headers=self.headers, allow_redirects=True
             )
+
+            # Check URL first (WAX210)
             match = re.search(r'stok=([a-f0-9]+)', r.url)
             if match:
                 self.stok = match.group(1)
                 return True
+
+            # Check response body (WAX218 puts stok in page content)
+            match = re.search(r'stok=([a-f0-9]+)', r.text)
+            if match:
+                self.stok = match.group(1)
+                return True
+
             return False
         except Exception:
             return False
