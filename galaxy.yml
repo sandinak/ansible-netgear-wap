@@ -1,0 +1,32 @@
+---
+namespace: sandinak
+name: netgear_wap
+version: 1.0.0
+readme: README.md
+authors:
+  - sandinak <1916398+sandinak@users.noreply.github.com>
+description: Ansible modules for managing NETGEAR WAX series wireless access points
+license:
+  - GPL-3.0-or-later
+license_file: LICENSE
+tags:
+  - netgear
+  - wireless
+  - wax210
+  - access_point
+  - networking
+  - wifi
+dependencies: {}
+repository: https://github.com/sandinak/ansible-netgear-wap
+documentation: https://github.com/sandinak/ansible-netgear-wap/tree/main/docs
+homepage: https://github.com/sandinak/ansible-netgear-wap
+issues: https://github.com/sandinak/ansible-netgear-wap/issues
+build_ignore:
+  - '*.pyc'
+  - '__pycache__'
+  - 'venv'
+  - '.git'
+  - '.gitignore'
+  - 'automated_luci_analyzer.py'
+  - 'Makefile'
+

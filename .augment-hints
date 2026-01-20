@@ -1,0 +1,108 @@
+# Augment Hints for ansible-netgear-wap Repository
+
+## Project Overview
+This is an Ansible collection for managing Netgear WAP (Wireless Access Point) devices,
+specifically WAC510 and WAX210 models. The devices run OpenWrt with a customized LuCI web interface.
+
+## Key Technical Discoveries
+
+### Authentication Flow
+1. POST to `/cgi-bin/luci` with `username`, `password` (hashed), `agree=1`, `account`
+2. New firmware (1.1.0.34+) uses SHA-512 hashing: `sha512(password + "\n")`
+3. Successful login returns redirect URL containing session token (stok)
+4. All subsequent requests require stok in URL path: `/cgi-bin/luci/;stok={stok}/admin/...`
+5. Session cookie `sysauth` must be maintained
+
+### SSID Configuration API
+- Main wireless page: `/admin/network/wireless_device`
+- SSID edit popup: `/admin/network/wifi_Encryption_P2P?netId=wifi0.network{N}&...`
+- Form submission: POST to `/admin/network/wireless_device` with `form_submit=1`
+
+### UCI Field Naming Convention
+All form fields use: `cbid.{config}.{section}.{option}`
+- config: `wireless`, `network`, etc.
+- section: `wifi0_ssid_1`, `wifi1_ssid_2`, `wifix_ssid_3` (combined view)
+- option: `ssid`, `vlan_id`, `encryption`, `key`, etc.
+
+### VLAN Configuration
+- VLAN ID field: `cbid.wireless.wifi0_ssid_{N}.vlan_id` (text, 1-4094)
+- VLAN isolation: `cbid.wireless.wifi0_ssid_{N}.isolation` (radio: 0 or 1)
+- Management VLAN: `cbid.network.sys.ManagementVLANID`
+
+### Known SSID Slots (on test devices)
+| SSID | Slot | VLAN ID |
+|------|------|---------|
+| SPEAKER | 1 | 119 |
+| JTW | 2 | 116 |
+| VOV | 3 | 121 |
+
+### Encryption Types
+- `none` - Open
+- `psk2` / `psk2+ccmp` - WPA2-Personal
+- `sae` / `sae+ccmp` - WPA3-Personal
+- `sae-mixed` / `sae-mixed+ccmp` - WPA2/WPA3-Personal
+
+### CSRF Handling
+- Token in hidden field: `<input name="val_csrf" value="{token}">`
+- Also available via: `/admin/system/ajax_getCsrf`
+- Must be included in all form submissions
+
+## File Locations
+
+### Ansible Module
+- `library/netgear_wax210_wireless.py` - Main wireless config module
+
+### Analysis Tools
+- `automated_luci_analyzer.py` - Selenium + MITM proxy analyzer
+- `luci_capture_addon.py` - MITM proxy addon for request capture
+- `analysis_captures/` - Captured HTML, screenshots, and traffic
+
+### Documentation
+- `LUCI_API_ANALYSIS.md` - Comprehensive API documentation
+- `WAX210_API_REFERENCE.md` - API reference for the device
+
+## Testing
+
+### Test Device IPs
+- 172.19.4.10 - Primary test AP
+- 172.19.4.11 - Secondary test AP
+- Password: `***REMOVED***`
+
+### Running Analysis
+```bash
+make discovery  # Sets up venv and runs analyzer
+python3 automated_luci_analyzer.py --host 172.19.4.10 --password "***REMOVED***"
+```
+
+## Common Issues
+
+### Login Fails with "Invalid CSRF token"
+- The device requires the ajax_setCsrf endpoint to be called before form submission
+- Ensure cookies are being maintained across requests
+
+### Popup Windows Not Captured
+- SSID Edit opens a new browser window
+- Use Selenium's `window_handles` to switch to popup
+
+### Form Field Changes Not Saving
+- Must set `form_submit=1` in POST data
+- CSRF token must be fresh
+- May need to call Apply after Save
+
+### VLAN Changes Not Working via Main Form
+- **IMPORTANT**: VLAN changes via the main wireless_device form do NOT work reliably
+- Use the popup form approach instead:
+  1. GET `/admin/network/wifi_Encryption_P2P?netId=wifi0.network{N}&...`
+  2. Parse all form fields from the popup HTML
+  3. Modify `cbid.wireless.wifi0_ssid_{N}.vlan_id` value
+  4. POST to the form action URL (from the form's action attribute)
+- The popup form action uses single quotes: `action='/cgi-bin/luci/;stok=.../admin/network/wireless_device'`
+- This approach is implemented in `set_ssid_vlan_via_popup()` method
+
+## Development Tips
+
+1. Always use the analysis tools to capture real traffic before implementing changes
+2. The web interface uses extensive JavaScript - static HTML analysis may miss dynamic fields
+3. Radio configurations (wifi0/wifi1) are often set independently
+4. The `wifix` prefix indicates combined 2.4GHz + 5GHz settings
+
