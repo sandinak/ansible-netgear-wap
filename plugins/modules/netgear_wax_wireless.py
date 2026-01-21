@@ -440,7 +440,7 @@ class WAX210API:
         self.host = module.params['host']
         self.username = module.params.get('username', 'admin')
         self.password = module.params['password']
-        self.base_url = f"https://{self.host}"
+        self.base_url = None  # Will be set by _detect_protocol
         self.stok = None
         self.validate_certs = module.params.get('validate_certs', False)
 
@@ -460,6 +460,24 @@ class WAX210API:
             urllib_request.HTTPCookieProcessor(self.cookie_jar),
             urllib_request.HTTPSHandler(context=self.ssl_ctx)
         )
+
+        # Auto-detect protocol
+        self._detect_protocol()
+
+    def _detect_protocol(self):
+        """Auto-detect whether to use HTTP or HTTPS"""
+        for protocol in ['https', 'http']:
+            try:
+                test_url = f"{protocol}://{self.host}/cgi-bin/luci"
+                req = urllib_request.Request(test_url)
+                req.add_header('User-Agent', 'Mozilla/5.0')
+                self.opener.open(req, timeout=5)
+                self.base_url = f"{protocol}://{self.host}"
+                return
+            except Exception:
+                continue
+        # Default to HTTPS if both fail
+        self.base_url = f"https://{self.host}"
 
     def _hash_password_md5(self, password):
         """Hash password with MD5 (old firmware)"""
@@ -544,10 +562,16 @@ class WAX210API:
         except Exception as e:
             self.module.fail_json(msg=f"Login request failed: {str(e)}")
 
-        # Extract stok from response
-        stok_match = re.search(r';stok=([a-f0-9]+)', body)
+        # Extract stok from response URL first (WAX210), then body (WAX218)
+        final_url = response.geturl()
+        stok_match = re.search(r'stok=([a-f0-9]+)', final_url)
         if stok_match:
             self.stok = stok_match.group(1)
+        else:
+            # WAX218 puts stok in body, not URL
+            stok_match = re.search(r'stok=([a-f0-9]+)', body)
+            if stok_match:
+                self.stok = stok_match.group(1)
 
         # Verify we have stok
         if self.stok:

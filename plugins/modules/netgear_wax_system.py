@@ -130,11 +130,12 @@ class WAX210SystemAPI:
         self.host = module.params['host']
         self.username = module.params.get('username', 'admin')
         self.password = module.params['password']
-        self.base_url = f"https://{self.host}"
+        self.base_url = None  # Will be set by _detect_protocol
         self.stok = None
         self.sysauth = None
         self.opener = None
         self._setup_opener()
+        self._detect_protocol()
 
     def _setup_opener(self):
         """Setup urllib opener with SSL context and cookies"""
@@ -149,6 +150,22 @@ class WAX210SystemAPI:
             urllib_request.HTTPSHandler(context=ctx)
         )
         self.cookie_jar = cookie_jar
+
+    def _detect_protocol(self):
+        """Auto-detect whether to use HTTP or HTTPS"""
+        # Try HTTPS first, then fall back to HTTP
+        for protocol in ['https', 'http']:
+            try:
+                test_url = f"{protocol}://{self.host}/cgi-bin/luci"
+                req = urllib_request.Request(test_url)
+                req.add_header('User-Agent', 'Mozilla/5.0')
+                self.opener.open(req, timeout=5)
+                self.base_url = f"{protocol}://{self.host}"
+                return
+            except Exception:
+                continue
+        # Default to HTTPS if both fail (will error later with better message)
+        self.base_url = f"https://{self.host}"
 
     def _hash_password_sha512(self, password):
         """Hash password using SHA512 (newer firmware)"""
@@ -200,8 +217,12 @@ class WAX210SystemAPI:
         response = self.opener.open(req)
         body = response.read().decode('utf-8')
 
-        # Check for stok in body (works for both models)
-        stok_match = re.search(r'stok=([a-f0-9]+)', body)
+        # Extract stok from response URL first (WAX210), then body (WAX218)
+        final_url = response.geturl()
+        stok_match = re.search(r'stok=([a-f0-9]+)', final_url)
+        if not stok_match:
+            # WAX218 puts stok in body, not URL
+            stok_match = re.search(r'stok=([a-f0-9]+)', body)
         if not stok_match:
             return False
 

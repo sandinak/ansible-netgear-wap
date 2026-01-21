@@ -82,10 +82,22 @@ def hash_password_sha512(password):
     """Hash password with SHA-512 (new firmware 1.1.0.34+)"""
     return hashlib.sha512(to_bytes(password + "\n")).hexdigest()
 
+def detect_protocol(host, opener):
+    """Auto-detect whether to use HTTP or HTTPS"""
+    for protocol in ['https', 'http']:
+        try:
+            test_url = f"{protocol}://{host}/cgi-bin/luci"
+            req = urllib_request.Request(test_url)
+            req.add_header('User-Agent', 'Mozilla/5.0')
+            opener.open(req, timeout=5)
+            return f"{protocol}://{host}"
+        except Exception:
+            continue
+    # Default to HTTPS if both fail
+    return f"https://{host}"
+
 def login_and_get_config(module, host, username, password):
     """Login to device and get wireless configuration"""
-    base_url = f"https://{host}"
-
     # Create SSL context that doesn't verify certificates
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
@@ -98,6 +110,9 @@ def login_and_get_config(module, host, username, password):
         urllib_request.HTTPCookieProcessor(cookie_jar),
         urllib_request.HTTPSHandler(context=ctx)
     )
+
+    # Auto-detect protocol
+    base_url = detect_protocol(host, opener)
 
     # First GET the login page to detect firmware version
     login_url = f"{base_url}/cgi-bin/luci"
@@ -128,15 +143,19 @@ def login_and_get_config(module, host, username, password):
         response = opener.open(req)
         body = response.read().decode('utf-8')
 
-        # Extract stok from response
-        stok_match = re.search(r';stok=([a-f0-9]+)', body)
+        # Extract stok from response URL first (WAX210), then body (WAX218)
+        final_url = response.geturl()
+        stok_match = re.search(r'stok=([a-f0-9]+)', final_url)
+        if not stok_match:
+            # WAX218 puts stok in body, not URL
+            stok_match = re.search(r'stok=([a-f0-9]+)', body)
         if not stok_match:
             module.fail_json(msg="Login failed - could not obtain session token. Check username/password.")
-        
+
         stok = stok_match.group(1)
-        
-        # Get wireless configuration
-        config_url = f"{base_url}/cgi-bin/luci/;stok={stok}/admin/network/iface_status2/99,app,guest,lan,mgmt,vlan116,vlan119,vlan121"
+
+        # Get wireless configuration - use minimal "99" which returns all interfaces
+        config_url = f"{base_url}/cgi-bin/luci/;stok={stok}/admin/network/iface_status2/99"
         req = urllib_request.Request(config_url)
         response = opener.open(req)
         config_body = response.read().decode('utf-8')

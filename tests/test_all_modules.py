@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
-"""Test all modules on both WAX210 and WAX218 devices."""
+"""Test all modules on both WAX210 and WAX218 devices.
+
+Usage:
+    WAX_PASSWORD=yourpassword python3 tests/test_all_modules.py
+"""
+import os
 import sys
 sys.path.insert(0, 'plugins/modules')
 
 DEVICES = [
     ('WAX210', '172.19.4.10'),
     ('WAX218', '172.19.4.14'),
+    ('WAX210-2', '172.19.4.16'),
 ]
-PASSWORD = 'your_password_here'
+PASSWORD = os.environ.get('WAX_PASSWORD')
+if not PASSWORD:
+    print("ERROR: Set WAX_PASSWORD environment variable")
+    print("Usage: WAX_PASSWORD=yourpassword python3 tests/test_all_modules.py")
+    sys.exit(1)
 
 class FakeModule:
     def __init__(self):

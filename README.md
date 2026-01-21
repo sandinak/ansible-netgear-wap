@@ -4,10 +4,12 @@ Ansible modules for managing NETGEAR WAX series wireless access points with auto
 
 ## Supported Models
 
-| Model  | Status | Notes |
-|--------|--------|-------|
-| WAX210 | ✅ | Fully tested |
-| WAX218 | ✅ | Fully tested |
+| Model  | Auth | Status | Notes |
+|--------|------|--------|-------|
+| WAX210 | SHA-512 | ✅ Fully tested | stok in URL |
+| WAX218 | MD5 | ✅ Fully tested | stok in body |
+
+Additional models using the same LuCI interface should work automatically.
 
 ## Features
 
@@ -18,6 +20,13 @@ Ansible modules for managing NETGEAR WAX series wireless access points with auto
 | Configure radio channels | `netgear_wax_radio` | ✅ |
 | Configure AP name | `netgear_wax_system` | ✅ |
 | Enable/disable management interface | `netgear_wax_system` | ✅ |
+
+## Multi-Model Support
+
+All modules automatically detect:
+- **Authentication type**: SHA-512 (newer firmware) or MD5 (older firmware)
+- **Session token location**: URL redirect (WAX210) or page body (WAX218)
+- **SSID popup endpoint**: Model-specific popup forms
 
 ## Quick Start
 
@@ -51,11 +60,18 @@ Ansible modules for managing NETGEAR WAX series wireless access points with auto
 ## Installation
 
 ```bash
-git clone <repository-url>
-cd ansible-netgear-wap
+# From GitHub
+ansible-galaxy collection install git+https://github.com/sandinak/ansible-netgear-wap.git
+
+# Specific version
+ansible-galaxy collection install git+https://github.com/sandinak/ansible-netgear-wap.git,v1.1.1
 ```
 
-Modules are in `plugins/modules/` as an Ansible Galaxy collection.
+Or clone for development:
+```bash
+git clone https://github.com/sandinak/ansible-netgear-wap.git
+cd ansible-netgear-wap
+```
 
 ## Documentation
 
@@ -81,8 +97,33 @@ Analysis tools are in `tools/analyzer/`.
 
 ## Tested Firmware
 
-- WAX210 V1.1.0.34
-- WAX218 (tested)
+| Model | Firmware | Auth | stok Location |
+|-------|----------|------|---------------|
+| WAX210 | V1.1.0.34 | SHA-512 | URL |
+| WAX218 | V1.x | MD5 | Body |
+
+## Running Tests
+
+```bash
+# Set password and run integration tests
+export WAX_PASSWORD='your_password'
+python3 tests/test_all_modules.py
+
+# Or via make
+make test-integration
+```
+
+## Changelog
+
+### v1.1.1
+- Fixed stok extraction for multi-model support (URL and body)
+- Fixed info module to use generic interface endpoint
+- All 12 tests pass on WAX210 and WAX218
+
+### v1.1.0
+- Renamed modules from `netgear_wax210_*` to `netgear_wax_*`
+- Added automatic model detection (SHA-512 vs MD5 auth)
+- Added WAX218 support with model-specific endpoints
 
 ## License
 

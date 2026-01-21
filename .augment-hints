@@ -66,12 +66,12 @@ All form fields use: `cbid.{config}.{section}.{option}`
 ### Test Device IPs
 - 172.19.4.10 - Primary test AP
 - 172.19.4.11 - Secondary test AP
-- Password: `***REMOVED***`
+- Password: `r0llerDizk0Bawtms`
 
 ### Running Analysis
 ```bash
 make discovery  # Sets up venv and runs analyzer
-python3 automated_luci_analyzer.py --host 172.19.4.10 --password "***REMOVED***"
+python3 automated_luci_analyzer.py --host 172.19.4.10 --password "r0llerDizk0Bawtms"
 ```
 
 ## Common Issues

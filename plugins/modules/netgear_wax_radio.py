@@ -125,17 +125,30 @@ class WAX210RadioAPI:
         self.session = requests.Session()
         self.session.verify = self.validate_certs
         self.stok = None
+        self.base_url = self._detect_protocol()
         self.headers = {
             'User-Agent': 'Mozilla/5.0',
-            'Referer': f'https://{self.host}/cgi-bin/luci',
-            'Origin': f'https://{self.host}'
+            'Referer': f'{self.base_url}/cgi-bin/luci',
+            'Origin': self.base_url
         }
+
+    def _detect_protocol(self):
+        """Auto-detect whether to use HTTP or HTTPS"""
+        for protocol in ['https', 'http']:
+            try:
+                test_url = f"{protocol}://{self.host}/cgi-bin/luci"
+                r = self.session.get(test_url, timeout=5)
+                if r.status_code in [200, 301, 302]:
+                    return f"{protocol}://{self.host}"
+            except Exception:
+                continue
+        return f"https://{self.host}"
 
     def login(self):
         """Login to the WAX210/WAX218 and obtain session token"""
         try:
             # Get login page to detect auth type
-            r = self.session.get(f'https://{self.host}/cgi-bin/luci', headers=self.headers)
+            r = self.session.get(f'{self.base_url}/cgi-bin/luci', headers=self.headers)
             login_html = r.text
 
             # Detect if firmware uses SHA-512 (new) or MD5 (old)
@@ -146,7 +159,7 @@ class WAX210RadioAPI:
 
             self.session.cookies.set('is_login', '1')
             r = self.session.post(
-                f'https://{self.host}/cgi-bin/luci',
+                f'{self.base_url}/cgi-bin/luci',
                 data={'username': self.username, 'password': hashed_pw, 'agree': '1', 'account': self.username},
                 headers=self.headers, allow_redirects=True
             )
@@ -170,7 +183,7 @@ class WAX210RadioAPI:
     def get_radio_config(self):
         """Get current radio configuration (channels)"""
         r = self.session.get(
-            f'https://{self.host}/cgi-bin/luci/;stok={self.stok}/admin/network/wireless_device',
+            f'{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/network/wireless_device',
             headers=self.headers, allow_redirects=False
         )
         config = {}
@@ -221,14 +234,14 @@ class WAX210RadioAPI:
         }
 
         # POST to wifi_Channel endpoint
-        channel_url = f'https://{self.host}/cgi-bin/luci/;stok={self.stok}/admin/network/wifi_Channel'
+        channel_url = f'{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/network/wifi_Channel'
         r = self.session.post(channel_url, data=wifi_channel_data, headers=self.headers)
 
         if r.status_code != 200:
             return False, f"wifi_Channel failed: {r.status_code}"
 
         # Trigger save/apply
-        save_url = f'https://{self.host}/cgi-bin/luci/;stok={self.stok}/admin/uci/saveapply'
+        save_url = f'{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/uci/saveapply'
         self.session.get(save_url, headers=self.headers)
 
         return True, f"Channels set: 2.4GHz={new_ch0}, 5GHz={new_ch1}"
