@@ -184,13 +184,38 @@ class WAX210SystemAPI:
         else:
             req = urllib_request.Request(url)
 
-        req.add_header('User-Agent', 'Mozilla/5.0')
+        req.add_header('User-Agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:132.0) Gecko/20100101 Firefox/132.0')
         req.add_header('Referer', f'{self.base_url}/cgi-bin/luci')
+        req.add_header('Origin', self.base_url)
         if self.sysauth:
             req.add_header('Cookie', f'sysauth={self.sysauth}; is_login=1')
 
         response = self.opener.open(req)
         return response.read().decode('utf-8'), response
+
+    def wait_for_ready(self, timeout=30, check_interval=2):
+        """Wait for device to be ready after applying changes.
+
+        Polls the login page until responsive or timeout.
+        Returns True if device is ready, False if timeout.
+        """
+        import time as time_module
+        start_time = time_module.time()
+
+        while time_module.time() - start_time < timeout:
+            try:
+                req = urllib_request.Request(f"{self.base_url}/cgi-bin/luci")
+                req.add_header('User-Agent', 'Mozilla/5.0')
+                response = self.opener.open(req, timeout=5)
+                body = response.read().decode('utf-8')
+                # Check if we get a valid login page
+                if 'password' in body.lower() or 'login' in body.lower():
+                    return True
+            except Exception:
+                pass
+            time_module.sleep(check_interval)
+
+        return False
 
     def login(self):
         """Login to the AP and get session token"""
@@ -234,6 +259,40 @@ class WAX210SystemAPI:
                 break
 
         return True
+
+    def get_csrf_token(self):
+        """Get CSRF token from the device via AJAX endpoint"""
+        if not self.stok:
+            if not self.login():
+                return None
+
+        url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/system/ajax_getCsrf"
+        body, _ = self._make_request(url)
+
+        try:
+            result = json.loads(body)
+            return result.get('val_csrf')
+        except Exception:
+            return None
+
+    def set_csrf_token(self):
+        """Call ajax_setCsrf to prepare for form submission.
+
+        The browser calls this before submitting a form.
+        Returns the CSRF token if available.
+        """
+        if not self.stok:
+            if not self.login():
+                return None
+
+        url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/system/ajax_setCsrf"
+        body, _ = self._make_request(url)
+
+        try:
+            result = json.loads(body)
+            return result.get('val_csrf')
+        except Exception:
+            return None
 
     def get_system_config(self):
         """Get current system configuration (AP name, management interface state)"""
@@ -280,61 +339,173 @@ class WAX210SystemAPI:
 
         return config
 
-    def set_ap_name(self, new_name):
-        """Set AP name via wireless_device form submission"""
-        if not self.stok:
-            if not self.login():
-                return False, "Login failed"
+    def _extract_form_fields(self, html):
+        """Extract all form fields from an HTML page.
 
-        # Get current page for CSRF token
-        url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/network/wireless_device"
-        html, _ = self._make_request(url)
+        Returns a dictionary of field name -> value for all inputs and selects.
+        """
+        form_data = {}
 
-        # Find CSRF token
-        csrf_match = re.search(r'id="snid"[^>]*value="([^"]*)"', html)
-        csrf_token = csrf_match.group(1) if csrf_match else str(int(time.time()))
+        # Find all input fields
+        for match in re.finditer(r'<input[^>]*>', html, re.IGNORECASE):
+            inp = match.group(0)
+            name_match = re.search(r'name="([^"]+)"', inp)
+            if not name_match:
+                continue
+            name = name_match.group(1)
+            value_match = re.search(r'value="([^"]*)"', inp)
+            value = value_match.group(1) if value_match else ''
+            type_match = re.search(r'type="([^"]+)"', inp)
+            inp_type = type_match.group(1) if type_match else 'text'
 
-        # Submit form with AP name
-        form_data = {
-            'cbid.system.system.SystemName': new_name,
-            'apply_form_submit': '1',
-            'apply_val_csrf': csrf_token,
-        }
+            if inp_type == 'checkbox':
+                if 'checked' in inp:
+                    form_data[name] = value
+            elif inp_type == 'radio':
+                if 'checked' in inp:
+                    form_data[name] = value
+            else:
+                form_data[name] = value
 
-        submit_url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/network/wireless_device"
-        self._make_request(submit_url, data=form_data, method='POST')
+        # Find all select fields with selected options
+        for match in re.finditer(r'<select[^>]*name="([^"]+)"[^>]*>(.*?)</select>', html, re.DOTALL | re.IGNORECASE):
+            name = match.group(1)
+            options = match.group(2)
+            selected_match = re.search(r'<option[^>]*selected[^>]*value="([^"]*)"', options, re.IGNORECASE)
+            if selected_match:
+                form_data[name] = selected_match.group(1)
 
-        time.sleep(2)
-        return True, f"AP name set to {new_name}"
+        return form_data
 
-    def set_mgmt_interface(self, wifi0_enabled=None, wifi1_enabled=None):
-        """Enable/disable management interface on radios.
+    def set_ap_name(self, new_name, wait_timeout=30):
+        """Set AP name via wireless_device form submission.
 
-        The management interface uses wifi0_mgmt (2.4GHz) and wifi1_mgmt (5GHz).
-        Setting disabled=1 disables the interface, disabled=0 enables it.
+        Uses two-step process:
+        1. GET wireless_device page and extract ALL form fields
+        2. Modify SystemName and POST complete form (staging)
+        3. POST to saveapply (apply changes)
+        4. Wait for device to be ready
         """
         if not self.stok:
             if not self.login():
                 return False, "Login failed"
 
-        # Get current page for CSRF token and current state
-        url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/network/wireless_device"
-        html, _ = self._make_request(url)
+        # Step 0: Get the wireless_device page and extract all form fields
+        page_url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/network/wireless_device"
+        try:
+            body, _ = self._make_request(page_url)
+        except Exception as e:
+            return False, f"Could not get form page: {str(e)}"
 
-        # Find CSRF token
-        csrf_match = re.search(r'id="snid"[^>]*value="([^"]*)"', html)
-        csrf_token = csrf_match.group(1) if csrf_match else str(int(time.time()))
+        # Extract all form fields from the page
+        form_data = self._extract_form_fields(body)
+        if not form_data:
+            return False, "Could not extract form fields from page"
 
-        form_data = {
-            'apply_form_submit': '1',
-            'apply_val_csrf': csrf_token,
+        # Get CSRF token from AJAX endpoint (form has empty val_csrf)
+        csrf_token = self.get_csrf_token()
+        if not csrf_token:
+            return False, "Could not obtain CSRF token"
+
+        # Call set_csrf to prepare for form submission (browser does this)
+        self.set_csrf_token()
+
+        # Step 1: Modify the fields we want to change
+        form_data['cbid.system.system.SystemName'] = new_name
+        form_data['form_submit'] = '1'
+        form_data['val_csrf'] = csrf_token
+
+        # POST the complete form using direct request (like wireless module)
+        submit_url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/network/wireless_device"
+        encoded_data = urllib_parse.urlencode(form_data).encode()
+
+        req = urllib_request.Request(submit_url, data=encoded_data, method='POST')
+        req.add_header('Content-Type', 'application/x-www-form-urlencoded')
+        req.add_header('Referer', page_url)
+        req.add_header('Origin', self.base_url)
+        req.add_header('User-Agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:132.0) Gecko/20100101 Firefox/132.0')
+        if self.sysauth:
+            req.add_header('Cookie', f'sysauth={self.sysauth}')
+
+        try:
+            response = self.opener.open(req)
+            response.read()  # consume response
+        except urllib_error.HTTPError as e:
+            return False, f"Form submission HTTP error: {e.code} - {e.reason}"
+        except Exception as e:
+            return False, f"Form submission error: {str(e)}"
+
+        # Step 2: Apply changes using saveapply endpoint
+        apply_url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/uci/saveapply"
+        apply_data = {
+            'form_submit': '1',
+            'val_csrf': csrf_token,
+            'submitType': '2',
+            'saveApply': '',
         }
+        apply_encoded = urllib_parse.urlencode(apply_data).encode()
+
+        req = urllib_request.Request(apply_url, data=apply_encoded, method='POST')
+        req.add_header('Content-Type', 'application/x-www-form-urlencoded')
+        req.add_header('Referer', submit_url)
+        req.add_header('Origin', self.base_url)
+        req.add_header('User-Agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:132.0) Gecko/20100101 Firefox/132.0')
+        if self.sysauth:
+            req.add_header('Cookie', f'sysauth={self.sysauth}')
+
+        try:
+            response = self.opener.open(req)
+            response.read()  # consume response
+        except urllib_error.HTTPError as e:
+            return False, f"Apply HTTP error: {e.code} - {e.reason}"
+        except Exception as e:
+            return False, f"Apply error: {str(e)}"
+
+        # Wait for device to be ready
+        if not self.wait_for_ready(timeout=wait_timeout):
+            return False, f"AP name set to {new_name} but device not responding after {wait_timeout}s"
+
+        return True, f"AP name set to {new_name}"
+
+    def set_mgmt_interface(self, wifi0_enabled=None, wifi1_enabled=None, wait_timeout=30):
+        """Enable/disable management interface on radios.
+
+        The management interface uses wifi0_mgmt (2.4GHz) and wifi1_mgmt (5GHz).
+        Setting disabled=1 disables the interface, disabled=0 enables it.
+
+        Uses complete form submission with all fields extracted from the page.
+        """
+        if not self.stok:
+            if not self.login():
+                return False, "Login failed"
+
+        # Step 0: Get the wireless_device page and extract all form fields
+        page_url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/network/wireless_device"
+        try:
+            body, _ = self._make_request(page_url)
+        except Exception as e:
+            return False, f"Could not get form page: {str(e)}"
+
+        # Extract all form fields from the page
+        form_data = self._extract_form_fields(body)
+        if not form_data:
+            return False, "Could not extract form fields from page"
+
+        # Get CSRF token - use val_csrf from form or fetch fresh one
+        csrf_token = form_data.get('val_csrf') or self.get_csrf_token()
+        if not csrf_token:
+            return False, "Could not obtain CSRF token"
+
+        # Call set_csrf to prepare for form submission (browser does this)
+        self.set_csrf_token()
+
+        # Step 1: Modify the fields we want to change
+        form_data['form_submit'] = '1'
+        form_data['val_csrf'] = csrf_token
 
         # Management interface disable checkboxes
         # Checkbox checked = disabled, unchecked = enabled
         if wifi0_enabled is not None:
-            # If we want to disable (enabled=False), checkbox value should be '1' (checked)
-            # If we want to enable (enabled=True), we don't include the field or set to '0'
             if not wifi0_enabled:
                 form_data['cbid.wireless.wifi0_mgmt.disabled'] = '1'
             else:
@@ -346,16 +517,29 @@ class WAX210SystemAPI:
             else:
                 form_data['cbid.wireless.wifi1_mgmt.disabled'] = '0'
 
+        # POST the complete form (staging)
         submit_url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/network/wireless_device"
         self._make_request(submit_url, data=form_data, method='POST')
 
-        time.sleep(2)
+        # Step 2: Apply changes
+        apply_url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/uci/saveapply"
+        apply_data = {
+            'form_submit': '1',
+            'val_csrf': csrf_token,
+            'submitType': '2',
+            'saveApply': '',
+        }
+        self._make_request(apply_url, data=apply_data, method='POST')
 
+        # Wait for device to be ready
         changes = []
         if wifi0_enabled is not None:
             changes.append(f"2.4GHz={'enabled' if wifi0_enabled else 'disabled'}")
         if wifi1_enabled is not None:
             changes.append(f"5GHz={'enabled' if wifi1_enabled else 'disabled'}")
+
+        if not self.wait_for_ready(timeout=wait_timeout):
+            return False, f"Management interface set but device not responding after {wait_timeout}s"
 
         return True, f"Management interface: {', '.join(changes)}"
 

@@ -1164,6 +1164,9 @@ class WAX210API:
 
         sysauth = self.get_sysauth_cookie()
 
+        # Call set_csrf to prepare for form submission (browser does this)
+        self.set_csrf_token()
+
         # Step 1: Submit form to wireless_device endpoint (like popup Save button)
         submit_url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/network/wireless_device"
         encoded_data = urlencode(form_data).encode()

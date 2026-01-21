@@ -196,6 +196,11 @@ class WAX210RadioAPI:
             config[name] = match.group(1) if match else None
         return config
 
+    def set_csrf_token(self):
+        """Call ajax_setCsrf to prepare for form submission (browser does this)"""
+        url = f'{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/system/ajax_setCsrf'
+        self.session.get(url, headers=self.headers)
+
     def set_channels(self, channel_2g=None, channel_5g=None):
         """Set channel(s) for radio(s)
 
@@ -232,6 +237,9 @@ class WAX210RadioAPI:
             'form_submit': '1',
             'val_csrf': '',
         }
+
+        # Call set_csrf to prepare for form submission (browser does this)
+        self.set_csrf_token()
 
         # POST to wifi_Channel endpoint
         channel_url = f'{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/network/wifi_Channel'

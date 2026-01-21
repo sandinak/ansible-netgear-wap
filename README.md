@@ -64,7 +64,7 @@ All modules automatically detect:
 ansible-galaxy collection install git+https://github.com/sandinak/ansible-netgear-wap.git
 
 # Specific version
-ansible-galaxy collection install git+https://github.com/sandinak/ansible-netgear-wap.git,v1.1.1
+ansible-galaxy collection install git+https://github.com/sandinak/ansible-netgear-wap.git,v1.1.2
 ```
 
 Or clone for development:
@@ -114,6 +114,13 @@ make test-integration
 ```
 
 ## Changelog
+
+### v1.1.2
+- Fixed HTTP 403 errors when changing system settings
+- Fixed device lockouts after AP name configuration
+- Added proper CSRF token handling with ajax_setCsrf call
+- All write modules now use consistent CSRF paradigm
+- All 12 tests pass on WAX210 and WAX218
 
 ### v1.1.1
 - Fixed stok extraction for multi-model support (URL and body)

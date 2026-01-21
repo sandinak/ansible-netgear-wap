@@ -1,7 +1,7 @@
 ---
 namespace: sandinak
 name: netgear_wap
-version: 1.1.1
+version: 1.1.2
 readme: README.md
 authors:
   - sandinak <1916398+sandinak@users.noreply.github.com>
