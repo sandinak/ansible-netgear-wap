@@ -94,17 +94,25 @@ message:
     returned: always
 '''
 
-import hashlib
+import json
 import re
-import traceback
-
-try:
-    import requests
-    HAS_REQUESTS = True
-except ImportError:
-    HAS_REQUESTS = False
 
 from ansible.module_utils.basic import AnsibleModule
+
+# Import shared base class - try Ansible collection path first, then direct import for testing
+try:
+    from ansible_collections.sandinak.netgear_wap.plugins.module_utils.wax_api import WAXBaseAPI
+    HAS_WAX_API = True
+except ImportError:
+    try:
+        # Fallback for direct execution (testing)
+        import sys
+        import os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'module_utils'))
+        from wax_api import WAXBaseAPI
+        HAS_WAX_API = True
+    except ImportError:
+        HAS_WAX_API = False
 
 # Valid channel options
 CHANNELS_24GHZ = ['auto', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11']
@@ -113,93 +121,30 @@ CHANNELS_5GHZ = ['auto', '36', '40', '44', '48', '52', '56', '60', '64', '100', 
                  '153', '157', '161', '165']
 
 
-class WAX210RadioAPI:
-    """API class for WAX210 radio configuration"""
-
-    def __init__(self, module):
-        self.module = module
-        self.host = module.params['host']
-        self.username = module.params.get('username', 'admin')
-        self.password = module.params['password']
-        self.validate_certs = module.params.get('validate_certs', False)
-        self.session = requests.Session()
-        self.session.verify = self.validate_certs
-        self.stok = None
-        self.base_url = self._detect_protocol()
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0',
-            'Referer': f'{self.base_url}/cgi-bin/luci',
-            'Origin': self.base_url
-        }
-
-    def _detect_protocol(self):
-        """Auto-detect whether to use HTTP or HTTPS"""
-        for protocol in ['https', 'http']:
-            try:
-                test_url = f"{protocol}://{self.host}/cgi-bin/luci"
-                r = self.session.get(test_url, timeout=5)
-                if r.status_code in [200, 301, 302]:
-                    return f"{protocol}://{self.host}"
-            except Exception:
-                continue
-        return f"https://{self.host}"
-
-    def login(self):
-        """Login to the WAX210/WAX218 and obtain session token"""
-        try:
-            # Get login page to detect auth type
-            r = self.session.get(f'{self.base_url}/cgi-bin/luci', headers=self.headers)
-            login_html = r.text
-
-            # Detect if firmware uses SHA-512 (new) or MD5 (old)
-            if 'sha512sum' in login_html:
-                hashed_pw = hashlib.sha512(f'{self.password}\n'.encode()).hexdigest()
-            else:
-                hashed_pw = hashlib.md5(f'{self.password}\n'.encode()).hexdigest()
-
-            self.session.cookies.set('is_login', '1')
-            r = self.session.post(
-                f'{self.base_url}/cgi-bin/luci',
-                data={'username': self.username, 'password': hashed_pw, 'agree': '1', 'account': self.username},
-                headers=self.headers, allow_redirects=True
-            )
-
-            # Check URL first (WAX210)
-            match = re.search(r'stok=([a-f0-9]+)', r.url)
-            if match:
-                self.stok = match.group(1)
-                return True
-
-            # Check response body (WAX218 puts stok in page content)
-            match = re.search(r'stok=([a-f0-9]+)', r.text)
-            if match:
-                self.stok = match.group(1)
-                return True
-
-            return False
-        except Exception:
-            return False
+class WAX210RadioAPI(WAXBaseAPI):
+    """API class for WAX radio configuration - extends base class"""
 
     def get_radio_config(self):
         """Get current radio configuration (channels)"""
-        r = self.session.get(
-            f'{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/network/wireless_device',
-            headers=self.headers, allow_redirects=False
-        )
+        if not self.stok:
+            if not self.login():
+                return {}
+
+        url = f'{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/network/wireless_device'
+        body, response = self._make_request(url)
+
+        if body is None:
+            return {}
+
         config = {}
         patterns = [
             (r'channel_wifi0_val="([^"]*)"', 'wifi0_channel'),
             (r'channel_wifi1_val="([^"]*)"', 'wifi1_channel'),
         ]
         for pattern, name in patterns:
-            match = re.search(pattern, r.text)
+            match = re.search(pattern, body)
             config[name] = match.group(1) if match else None
         return config
-
-    def set_csrf_token(self):
-        """Call ajax_setCsrf to prepare for form submission (browser does this)"""
-        url = f'{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/system/ajax_setCsrf'
-        self.session.get(url, headers=self.headers)
 
     def set_channels(self, channel_2g=None, channel_5g=None):
         """Set channel(s) for radio(s)
@@ -211,6 +156,10 @@ class WAX210RadioAPI:
         Returns:
             tuple: (success: bool, message: str)
         """
+        if not self.stok:
+            if not self.login():
+                return False, "Login failed"
+
         # Get current values for any channels not being changed
         current = self.get_radio_config()
         new_ch0 = channel_2g if channel_2g else current.get('wifi0_channel', 'auto')
@@ -219,6 +168,9 @@ class WAX210RadioAPI:
         # Determine status based on channel value
         ch0_status = '1' if new_ch0 == 'auto' else '4'
         ch1_status = '1' if new_ch1 == 'auto' else '4'
+
+        # Get CSRF token
+        csrf_token = self.get_csrf_token() or ''
 
         wifi_channel_data = {
             'submitFlag': '1',
@@ -235,7 +187,7 @@ class WAX210RadioAPI:
             'channel_status5G': ch1_status,
             'channel_group5G': '0',
             'form_submit': '1',
-            'val_csrf': '',
+            'val_csrf': csrf_token,
         }
 
         # Call set_csrf to prepare for form submission (browser does this)
@@ -243,14 +195,14 @@ class WAX210RadioAPI:
 
         # POST to wifi_Channel endpoint
         channel_url = f'{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/network/wifi_Channel'
-        r = self.session.post(channel_url, data=wifi_channel_data, headers=self.headers)
+        body, response = self._make_request(channel_url, data=wifi_channel_data, method='POST')
 
-        if r.status_code != 200:
-            return False, f"wifi_Channel failed: {r.status_code}"
+        if body is None:
+            error_code = getattr(response, 'code', 'unknown') if response else 'unknown'
+            return False, f"wifi_Channel failed: {error_code}"
 
-        # Trigger save/apply
-        save_url = f'{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/uci/saveapply'
-        self.session.get(save_url, headers=self.headers)
+        # Apply changes using base class method
+        self.apply_changes()
 
         return True, f"Channels set: 2.4GHz={new_ch0}, 5GHz={new_ch1}"
 
@@ -276,8 +228,8 @@ def main():
         supports_check_mode=True
     )
 
-    if not HAS_REQUESTS:
-        module.fail_json(msg='requests library is required', **result)
+    if not HAS_WAX_API:
+        module.fail_json(msg='Failed to import WAXBaseAPI from module_utils', **result)
 
     # Validate channel values
     channel_2g = module.params.get('channel_2g')

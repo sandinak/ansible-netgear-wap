@@ -115,6 +115,14 @@ make test-integration
 
 ## Changelog
 
+### v1.1.3
+- Refactored all modules to use central `module_utils/wax_api.py` base class
+- Eliminated duplicate login, CSRF, HTTP, and model detection code across modules
+- Fixed wireless module CSRF handling in popup form submissions
+- Fixed VLAN regex to handle "vlanXXX" format stored by devices
+- Added selective test execution flags to replication tests
+- All 12/12 tests pass on WAX210 and WAX218
+
 ### v1.1.2
 - Fixed HTTP 403 errors when changing system settings
 - Fixed device lockouts after AP name configuration

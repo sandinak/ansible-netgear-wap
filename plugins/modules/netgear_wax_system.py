@@ -105,194 +105,36 @@ config:
 '''
 
 import json
-import hashlib
 import re
-import ssl
-import time
 
 try:
     import urllib.request as urllib_request
     import urllib.error as urllib_error
     import urllib.parse as urllib_parse
-    from urllib.parse import urljoin
     HAS_URLLIB = True
 except ImportError:
     HAS_URLLIB = False
 
 from ansible.module_utils.basic import AnsibleModule
-from ansible.module_utils._text import to_bytes
 
-class WAX210SystemAPI:
-    """API client for WAX210 system-level configuration"""
+# Import shared base class - try Ansible collection path first, then direct import for testing
+try:
+    from ansible_collections.sandinak.netgear_wap.plugins.module_utils.wax_api import WAXBaseAPI
+    HAS_WAX_API = True
+except ImportError:
+    try:
+        # Fallback for direct execution (testing)
+        import sys
+        import os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'module_utils'))
+        from wax_api import WAXBaseAPI
+        HAS_WAX_API = True
+    except ImportError:
+        HAS_WAX_API = False
 
-    def __init__(self, module):
-        self.module = module
-        self.host = module.params['host']
-        self.username = module.params.get('username', 'admin')
-        self.password = module.params['password']
-        self.base_url = None  # Will be set by _detect_protocol
-        self.stok = None
-        self.sysauth = None
-        self.opener = None
-        self._setup_opener()
-        self._detect_protocol()
 
-    def _setup_opener(self):
-        """Setup urllib opener with SSL context and cookies"""
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-
-        import http.cookiejar
-        cookie_jar = http.cookiejar.CookieJar()
-        self.opener = urllib_request.build_opener(
-            urllib_request.HTTPCookieProcessor(cookie_jar),
-            urllib_request.HTTPSHandler(context=ctx)
-        )
-        self.cookie_jar = cookie_jar
-
-    def _detect_protocol(self):
-        """Auto-detect whether to use HTTP or HTTPS"""
-        # Try HTTPS first, then fall back to HTTP
-        for protocol in ['https', 'http']:
-            try:
-                test_url = f"{protocol}://{self.host}/cgi-bin/luci"
-                req = urllib_request.Request(test_url)
-                req.add_header('User-Agent', 'Mozilla/5.0')
-                self.opener.open(req, timeout=5)
-                self.base_url = f"{protocol}://{self.host}"
-                return
-            except Exception:
-                continue
-        # Default to HTTPS if both fail (will error later with better message)
-        self.base_url = f"https://{self.host}"
-
-    def _hash_password_sha512(self, password):
-        """Hash password using SHA512 (newer firmware)"""
-        return hashlib.sha512(to_bytes(password + "\n")).hexdigest()
-
-    def _hash_password_md5(self, password):
-        """Hash password using MD5 (older firmware/WAX218)"""
-        return hashlib.md5(to_bytes(password + "\n")).hexdigest()
-
-    def _make_request(self, url, data=None, method='GET'):
-        """Make HTTP request and return response body"""
-        if data:
-            encoded_data = urllib_parse.urlencode(data).encode()
-            req = urllib_request.Request(url, data=encoded_data, method=method)
-            req.add_header('Content-Type', 'application/x-www-form-urlencoded')
-        else:
-            req = urllib_request.Request(url)
-
-        req.add_header('User-Agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:132.0) Gecko/20100101 Firefox/132.0')
-        req.add_header('Referer', f'{self.base_url}/cgi-bin/luci')
-        req.add_header('Origin', self.base_url)
-        if self.sysauth:
-            req.add_header('Cookie', f'sysauth={self.sysauth}; is_login=1')
-
-        response = self.opener.open(req)
-        return response.read().decode('utf-8'), response
-
-    def wait_for_ready(self, timeout=30, check_interval=2):
-        """Wait for device to be ready after applying changes.
-
-        Polls the login page until responsive or timeout.
-        Returns True if device is ready, False if timeout.
-        """
-        import time as time_module
-        start_time = time_module.time()
-
-        while time_module.time() - start_time < timeout:
-            try:
-                req = urllib_request.Request(f"{self.base_url}/cgi-bin/luci")
-                req.add_header('User-Agent', 'Mozilla/5.0')
-                response = self.opener.open(req, timeout=5)
-                body = response.read().decode('utf-8')
-                # Check if we get a valid login page
-                if 'password' in body.lower() or 'login' in body.lower():
-                    return True
-            except Exception:
-                pass
-            time_module.sleep(check_interval)
-
-        return False
-
-    def login(self):
-        """Login to the AP and get session token"""
-        req = urllib_request.Request(f"{self.base_url}/cgi-bin/luci")
-        req.add_header('User-Agent', 'Mozilla/5.0')
-        response = self.opener.open(req)
-        login_html = response.read().decode('utf-8')
-
-        # Detect if firmware uses SHA-512 (new) or MD5 (old)
-        if 'sha512sum' in login_html:
-            hashed_pw = self._hash_password_sha512(self.password)
-        else:
-            hashed_pw = self._hash_password_md5(self.password)
-
-        login_data = f"username={self.username}&password={hashed_pw}&agree=1&account={self.username}"
-
-        req = urllib_request.Request(f"{self.base_url}/cgi-bin/luci", data=to_bytes(login_data))
-        req.add_header('Content-Type', 'application/x-www-form-urlencoded')
-        req.add_header('User-Agent', 'Mozilla/5.0')
-        req.add_header('Referer', f'{self.base_url}/cgi-bin/luci')
-        req.add_header('Origin', self.base_url)
-        req.add_header('Cookie', 'is_login=1')
-
-        response = self.opener.open(req)
-        body = response.read().decode('utf-8')
-
-        # Extract stok from response URL first (WAX210), then body (WAX218)
-        final_url = response.geturl()
-        stok_match = re.search(r'stok=([a-f0-9]+)', final_url)
-        if not stok_match:
-            # WAX218 puts stok in body, not URL
-            stok_match = re.search(r'stok=([a-f0-9]+)', body)
-        if not stok_match:
-            return False
-
-        self.stok = stok_match.group(1)
-
-        for cookie in self.cookie_jar:
-            if cookie.name == 'sysauth':
-                self.sysauth = cookie.value
-                break
-
-        return True
-
-    def get_csrf_token(self):
-        """Get CSRF token from the device via AJAX endpoint"""
-        if not self.stok:
-            if not self.login():
-                return None
-
-        url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/system/ajax_getCsrf"
-        body, _ = self._make_request(url)
-
-        try:
-            result = json.loads(body)
-            return result.get('val_csrf')
-        except Exception:
-            return None
-
-    def set_csrf_token(self):
-        """Call ajax_setCsrf to prepare for form submission.
-
-        The browser calls this before submitting a form.
-        Returns the CSRF token if available.
-        """
-        if not self.stok:
-            if not self.login():
-                return None
-
-        url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/system/ajax_setCsrf"
-        body, _ = self._make_request(url)
-
-        try:
-            result = json.loads(body)
-            return result.get('val_csrf')
-        except Exception:
-            return None
+class WAX210SystemAPI(WAXBaseAPI):
+    """API client for WAX system-level configuration - extends base class"""
 
     def get_system_config(self):
         """Get current system configuration (AP name, management interface state)"""
@@ -558,8 +400,8 @@ def main():
         supports_check_mode=True
     )
 
-    if not HAS_URLLIB:
-        module.fail_json(msg="urllib is required for this module")
+    if not HAS_WAX_API:
+        module.fail_json(msg="Failed to import WAXBaseAPI from module_utils")
 
     api = WAX210SystemAPI(module)
     changed = False

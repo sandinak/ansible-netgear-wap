@@ -30,13 +30,20 @@ def test_info():
     print("=" * 60)
     print("TEST 1: netgear_wax_info (read config)")
     print("=" * 60)
-    from netgear_wax_info import login_and_get_config
+    from netgear_wax_info import WAXInfoAPI
     results = []
     for name, host in DEVICES:
         try:
-            config = login_and_get_config(FakeModule(), host, 'admin', PASSWORD)
-            print(f"  ✅ {name}: Got {len(config)} interfaces")
-            results.append((name, True))
+            module = FakeModule()
+            module.params = {'host': host, 'username': 'admin', 'password': PASSWORD, 'validate_certs': False}
+            api = WAXInfoAPI(module)
+            if api.login():
+                config = api.get_wireless_config()
+                print(f"  ✅ {name}: Got {len(config)} interfaces")
+                results.append((name, True))
+            else:
+                print(f"  ❌ {name}: Login failed")
+                results.append((name, False))
         except Exception as e:
             print(f"  ❌ {name}: {e}")
             results.append((name, False))

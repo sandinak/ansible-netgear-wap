@@ -138,16 +138,28 @@ message:
 '''
 
 import json
-import hashlib
 import re
-import ssl
-import http.cookiejar
 import urllib.request as urllib_request
 import urllib.error as urllib_error
-from urllib.parse import urljoin, urlencode
+from urllib.parse import urlencode
 
 from ansible.module_utils.basic import AnsibleModule
-from ansible.module_utils._text import to_text, to_bytes
+from ansible.module_utils._text import to_bytes
+
+# Import shared base class - try Ansible collection path first, then direct import for testing
+try:
+    from ansible_collections.sandinak.netgear_wap.plugins.module_utils.wax_api import WAXBaseAPI
+    HAS_WAX_API = True
+except ImportError:
+    try:
+        # Fallback for direct execution (testing)
+        import sys
+        import os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'module_utils'))
+        from wax_api import WAXBaseAPI
+        HAS_WAX_API = True
+    except ImportError:
+        HAS_WAX_API = False
 
 # AES encryption for passphrases
 # NETGEAR WAX210 uses AES-256-ECB with PKCS7 padding
@@ -434,154 +446,28 @@ POPUP_FORM_FIELDS = {
 }
 
 
-class WAX210API:
-    def __init__(self, module):
-        self.module = module
-        self.host = module.params['host']
-        self.username = module.params.get('username', 'admin')
-        self.password = module.params['password']
-        self.base_url = None  # Will be set by _detect_protocol
-        self.stok = None
-        self.validate_certs = module.params.get('validate_certs', False)
+class WAX210API(WAXBaseAPI):
+    """API class for WAX wireless configuration - extends base class"""
 
+    def __init__(self, module):
+        super().__init__(module)
         # Model detection - can be overridden by module param
-        self.model = module.params.get('model', None)  # Auto-detect if None
+        self.model = module.params.get('model', None)
         self.ssid_popup_endpoint = None  # Set during login based on model
 
-        # Create SSL context that doesn't verify certificates
-        self.ssl_ctx = ssl.create_default_context()
-        if not self.validate_certs:
-            self.ssl_ctx.check_hostname = False
-            self.ssl_ctx.verify_mode = ssl.CERT_NONE
-
-        # Create cookie jar and opener
-        self.cookie_jar = http.cookiejar.CookieJar()
-        self.opener = urllib_request.build_opener(
-            urllib_request.HTTPCookieProcessor(self.cookie_jar),
-            urllib_request.HTTPSHandler(context=self.ssl_ctx)
-        )
-
-        # Auto-detect protocol
-        self._detect_protocol()
-
-    def _detect_protocol(self):
-        """Auto-detect whether to use HTTP or HTTPS"""
-        for protocol in ['https', 'http']:
-            try:
-                test_url = f"{protocol}://{self.host}/cgi-bin/luci"
-                req = urllib_request.Request(test_url)
-                req.add_header('User-Agent', 'Mozilla/5.0')
-                self.opener.open(req, timeout=5)
-                self.base_url = f"{protocol}://{self.host}"
-                return
-            except Exception:
-                continue
-        # Default to HTTPS if both fail
-        self.base_url = f"https://{self.host}"
-
-    def _hash_password_md5(self, password):
-        """Hash password with MD5 (old firmware)"""
-        return hashlib.md5(to_bytes(password + "\n")).hexdigest()
-
-    def _hash_password_sha512(self, password):
-        """Hash password with SHA-512 (new firmware 1.1.0.34+)"""
-        return hashlib.sha512(to_bytes(password + "\n")).hexdigest()
-
-    def _make_request(self, url, method='GET', data=None, headers=None):
-        """Make HTTP request to the device using urllib"""
-        if headers is None:
-            headers = {}
-
-        headers['User-Agent'] = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:132.0) Gecko/20100101 Firefox/132.0'
-
-        if data and isinstance(data, str):
-            data = to_bytes(data)
-
-        req = urllib_request.Request(url, data=data, headers=headers, method=method)
-
-        try:
-            response = self.opener.open(req)
-            body = response.read().decode('utf-8')
-            return body, response
-        except urllib_error.HTTPError as e:
-            self.module.fail_json(msg=f"HTTP request failed: {e.code} - {e.reason}")
-        except urllib_error.URLError as e:
-            self.module.fail_json(msg=f"URL error: {e.reason}")
-
     def login(self):
-        """Authenticate to the device and detect model."""
-        login_url = f"{self.base_url}/cgi-bin/luci"
+        """Login using base class, then set model-specific popup endpoint."""
+        # Use parent login first
+        if not super().login():
+            return False
 
-        # First GET the login page to detect firmware version and model
-        req = urllib_request.Request(login_url)
-        req.add_header('User-Agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:132.0) Gecko/20100101 Firefox/132.0')
-
-        try:
-            response = self.opener.open(req)
-            body = response.read().decode('utf-8')
-        except Exception as e:
-            self.module.fail_json(msg=f"Failed to access login page: {str(e)}")
-
-        # Auto-detect model from login page if not specified
-        if not self.model:
-            model_match = re.search(r'(WAX\d+)', body)
-            if model_match:
-                self.model = model_match.group(1)
-            else:
-                self.model = 'WAX210'  # Default fallback
-
-        # Set model-specific SSID popup endpoint
-        # WAX210: wifi_Encryption_P2P, WAX218: wifi_Encryption_Combined
+        # Set model-specific SSID popup endpoint after login (model is detected in base)
         if self.model == 'WAX218':
             self.ssid_popup_endpoint = '/admin/network/wifi_Encryption_Combined'
         else:
             self.ssid_popup_endpoint = '/admin/network/wifi_Encryption_P2P'
 
-        # Detect if firmware uses SHA-512 (new) or MD5 (old)
-        uses_sha512 = 'sha512sum' in body
-
-        # Hash password appropriately
-        if uses_sha512:
-            hashed_pw = self._hash_password_sha512(self.password)
-        else:
-            hashed_pw = self._hash_password_md5(self.password)
-
-        # Login - uses 'username' and 'password' fields (works for both models)
-        login_data = f"username={self.username}&password={hashed_pw}&agree=1&account={self.username}"
-
-        req = urllib_request.Request(login_url, data=to_bytes(login_data))
-        req.add_header('Content-Type', 'application/x-www-form-urlencoded')
-        req.add_header('User-Agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:132.0) Gecko/20100101 Firefox/132.0')
-        req.add_header('Referer', f'{self.base_url}/cgi-bin/luci')
-        req.add_header('Origin', self.base_url)
-        req.add_header('Cookie', 'is_login=1')
-
-        try:
-            response = self.opener.open(req)
-            body = response.read().decode('utf-8')
-        except Exception as e:
-            self.module.fail_json(msg=f"Login request failed: {str(e)}")
-
-        # Extract stok from response URL first (WAX210), then body (WAX218)
-        final_url = response.geturl()
-        stok_match = re.search(r'stok=([a-f0-9]+)', final_url)
-        if stok_match:
-            self.stok = stok_match.group(1)
-        else:
-            # WAX218 puts stok in body, not URL
-            stok_match = re.search(r'stok=([a-f0-9]+)', body)
-            if stok_match:
-                self.stok = stok_match.group(1)
-
-        # Verify we have stok
-        if self.stok:
-            return True
-
-        self.module.fail_json(
-            msg="Login failed - could not obtain session token. Check username/password.",
-            response_preview=body[:500] if body else "empty"
-        )
-        return False
+        return True
 
     def get_wireless_config(self):
         """Get wireless configuration from the device"""
@@ -615,29 +501,6 @@ class WAX210API:
                     ssid_configs.append(iface)
 
         return ssid_configs
-
-    def get_csrf_token(self):
-        """Get CSRF token from the device"""
-        if not self.stok:
-            self.login()
-
-        url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/system/ajax_getCsrf"
-        body, info = self._make_request(url)
-
-        try:
-            result = json.loads(body)
-            return result.get('val_csrf')
-        except Exception:
-            return None
-
-    def set_csrf_token(self):
-        """Set CSRF token on the device (required before form submission)"""
-        if not self.stok:
-            self.login()
-
-        url = f"{self.base_url}/cgi-bin/luci/;stok={self.stok}/admin/system/ajax_setCsrf"
-        body, info = self._make_request(url)
-        return True
 
     def get_wireless_page(self):
         """Get the full wireless configuration page HTML"""
@@ -859,7 +722,8 @@ class WAX210API:
         full_url = f"{popup_url}?{query_string}"
 
         body, response = self._make_request(full_url)
-        match = re.search(rf'name="cbid\.wireless\.wifi0_ssid_{ssid_slot}\.vlan_id"\s+value="(\d+)"', body)
+        # VLAN can be stored as "vlanXXX" or just "XXX"
+        match = re.search(rf'name="cbid\.wireless\.wifi0_ssid_{ssid_slot}\.vlan_id"\s+value="([^"]*)"', body)
         return match.group(1) if match else None
 
     def get_ssid_config_via_popup(self, ssid_slot):
@@ -882,7 +746,7 @@ class WAX210API:
         # Extract key fields using id= attribute (has actual value) or name= for inputs
         fields = [
             ('ssid', rf'id="cbid\.wireless\.wifi0_ssid_{ssid_slot}\.ssid"\s+value="([^"]*)"'),
-            ('vlan_id', rf'name="cbid\.wireless\.wifi0_ssid_{ssid_slot}\.vlan_id"\s+value="(\d+)"'),
+            ('vlan_id', rf'name="cbid\.wireless\.wifi0_ssid_{ssid_slot}\.vlan_id"\s+value="([^"]*)"'),
             ('key', rf'id="cbid\.wireless\.wifi0_ssid_{ssid_slot}\.key"\s+value="([^"]*)"'),
             ('wifi0_disabled', rf'name="cbid\.wireless\.wifi0_ssid_{ssid_slot}\.disabled"[^>]*value="([01])"'),
             ('wifi1_disabled', rf'name="cbid\.wireless\.wifi1_ssid_{ssid_slot}\.disabled"[^>]*value="([01])"'),
@@ -891,6 +755,14 @@ class WAX210API:
         for field_name, pattern in fields:
             match = re.search(pattern, body, re.IGNORECASE)
             config[field_name] = match.group(1) if match else None
+
+        # Set 'vlan' field - the device may store it as "vlanXXX" or just "XXX"
+        vlan_raw = config.get('vlan_id')
+        if vlan_raw:
+            if vlan_raw.startswith('vlan'):
+                config['vlan'] = vlan_raw  # Already in vlanXXX format
+            else:
+                config['vlan'] = f"vlan{vlan_raw}"  # Just a number, add prefix
 
         # Encryption - find checked radio button
         enc_pattern = rf'name="cbid\.wireless\.wifi0_ssid_{ssid_slot}\.encryption"[^>]*value="([^"]*)"[^>]*checked'
@@ -969,9 +841,16 @@ class WAX210API:
             if selected_match:
                 form_data[name] = selected_match.group(1)
 
-        # Set form_submit and new VLAN
+        # Get CSRF token from AJAX endpoint (form has empty val_csrf)
+        csrf_token = self.get_csrf_token() or ''
+
+        # Set form_submit, new VLAN, and CSRF token
         form_data['form_submit'] = '1'
         form_data[vlan_key] = str(new_vlan)
+        form_data['val_csrf'] = csrf_token
+
+        # Call set_csrf to prepare for form submission (browser does this)
+        self.set_csrf_token()
 
         # POST the form
         post_url = f"{self.base_url}{form_action}"
@@ -1130,8 +1009,15 @@ class WAX210API:
         # Set SSID name
         form_data[f'cbid.wireless.wifi0_ssid_{ssid_slot}.ssid'] = ssid_name
 
-        # Set form_submit
+        # Get CSRF token from AJAX endpoint (form has empty val_csrf)
+        csrf_token = self.get_csrf_token() or ''
+
+        # Set form_submit and CSRF token
         form_data['form_submit'] = '1'
+        form_data['val_csrf'] = csrf_token
+
+        # Call set_csrf to prepare for form submission (browser does this)
+        self.set_csrf_token()
 
         # POST the form
         post_url = f"{self.base_url}{form_action}"
@@ -1255,6 +1141,9 @@ def main():
         argument_spec=module_args,
         supports_check_mode=True
     )
+
+    if not HAS_WAX_API:
+        module.fail_json(msg='Failed to import WAXBaseAPI from module_utils', **result)
 
     # Create API instance
     api = WAX210API(module)
